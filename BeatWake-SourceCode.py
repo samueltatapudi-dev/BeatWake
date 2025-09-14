@@ -5,6 +5,8 @@ import time
 import threading
 import webbrowser
 from ttkthemes import ThemedTk
+import json
+import os
 
 # === Alarm Class ===
 class Alarm:
@@ -12,26 +14,68 @@ class Alarm:
         self.time_str = time_str
         self.url = url
         self.repeat_days = repeat_days
+        self._last_fired_key = None  # used to prevent duplicates
 
     def should_trigger(self):
         now = datetime.now()
-        now_str = now.strftime("%H:%M")
+        now_str_hm = now.strftime("%H:%M")
         weekday = now.strftime("%A")
-        if now_str != self.time_str:
+        # must match hour:minute
+        if now_str_hm != self.time_str:
             return False
+        # day must match or Once
         return "Once" in self.repeat_days or weekday in self.repeat_days
 
+    def fire_key_for_now(self):
+        # unique key per minute to avoid duplicate triggers in the same minute
+        return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    def to_dict(self):
+        return {
+            "time_str": self.time_str,
+            "url": self.url,
+            "repeat_days": self.repeat_days,
+        }
+
+    @staticmethod
+    def from_dict(data):
+        return Alarm(data["time_str"], data["url"], data["repeat_days"])
+
 alarms = []
+PERSIST_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "alarms.json")
+
+def load_alarms():
+    global alarms
+    try:
+        if os.path.exists(PERSIST_PATH):
+            with open(PERSIST_PATH, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            alarms = [Alarm.from_dict(a) for a in raw]
+            update_alarm_listbox()
+    except Exception as e:
+        messagebox.showwarning("Load Failed", f"Could not load alarms: {e}")
+
+def save_alarms():
+    try:
+        with open(PERSIST_PATH, "w", encoding="utf-8") as f:
+            json.dump([a.to_dict() for a in alarms], f, indent=2)
+    except Exception as e:
+        messagebox.showwarning("Save Failed", f"Could not save alarms: {e}")
 
 def alarm_checker():
     while True:
         for alarm in list(alarms):
             if alarm.should_trigger():
+                key = alarm.fire_key_for_now()
+                if alarm._last_fired_key == key:
+                    continue  # already fired this minute
                 webbrowser.open(alarm.url)
+                alarm._last_fired_key = key
                 if "Once" in alarm.repeat_days:
                     alarms.remove(alarm)
                     update_alarm_listbox()
-        time.sleep(10)
+                    save_alarms()
+        time.sleep(1)  # check every second for better accuracy
 
 # === THEMED GUI ===
 app = ThemedTk(theme="equilux")  # Dark theme
@@ -112,6 +156,7 @@ def add_alarm():
     new_alarm = Alarm(alarm_time, url, repeat_days)
     alarms.append(new_alarm)
     update_alarm_listbox()
+    save_alarms()
 
 def remove_selected():
     selected = alarm_listbox.curselection()
@@ -119,6 +164,7 @@ def remove_selected():
         index = selected[0]
         alarms.pop(index)
         update_alarm_listbox()
+        save_alarms()
 
 def test_alarm():
     url = url_entry.get().strip()
@@ -135,6 +181,7 @@ ttk.Button(btn_frame, text="Remove Selected", width=20, command=remove_selected)
 ttk.Button(btn_frame, text="Test Alarm", width=20, command=test_alarm).pack(side="left", padx=5)
 
 # === Start Alarm Thread ===
+load_alarms()
 threading.Thread(target=alarm_checker, daemon=True).start()
 
 app.mainloop()
