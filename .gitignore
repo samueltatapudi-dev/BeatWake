@@ -11,6 +11,9 @@ ENV/
 # Alarm data (optional - remove this line if you want to commit alarms)
 alarms.json
 
+# Spotify credentials - NEVER commit this!
+spotify_config.json
+
 # IDE
 .vscode/
 .idea/

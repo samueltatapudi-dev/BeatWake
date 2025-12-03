@@ -8,6 +8,7 @@ from ttkthemes import ThemedTk
 import json
 import os
 import subprocess
+from spotify_auth import SpotifyAuth
 
 # === Alarm Class ===
 class Alarm:
@@ -87,7 +88,9 @@ class Alarm:
 
 alarms = []
 PERSIST_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "alarms.json")
-snooze_alarms = []  # Track snoozed alarms
+SPOTIFY_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "spotify_config.json")
+snooze_alarms = []
+spotify_auth = SpotifyAuth(SPOTIFY_CONFIG_PATH)
 
 def load_alarms():
     global alarms
@@ -131,11 +134,25 @@ def alarm_checker():
                     continue
                 
                 play_system_beep()
-                try:
-                    webbrowser.open(alarm.url)
-                    update_status(f"Alarm triggered: {alarm.label or alarm.time_str}")
-                except Exception as e:
-                    update_status(f"Error opening browser: {e}")
+                
+                # Try Spotify API first, fall back to browser
+                track_uri = extract_track_uri(alarm.url)
+                if track_uri and spotify_auth.is_authenticated():
+                    try:
+                        if spotify_auth.play_track(track_uri):
+                            update_status(f"Alarm triggered (Spotify API): {alarm.label or alarm.time_str}")
+                        else:
+                            webbrowser.open(alarm.url)
+                            update_status(f"Alarm triggered (Browser): {alarm.label or alarm.time_str}")
+                    except Exception as e:
+                        webbrowser.open(alarm.url)
+                        update_status(f"Alarm triggered (Browser): {alarm.label or alarm.time_str}")
+                else:
+                    try:
+                        webbrowser.open(alarm.url)
+                        update_status(f"Alarm triggered: {alarm.label or alarm.time_str}")
+                    except Exception as e:
+                        update_status(f"Error opening browser: {e}")
                 
                 alarm._last_fired_key = key
                 if "Once" in alarm.repeat_days:
@@ -205,6 +222,27 @@ ttk.Checkbutton(app, text="Once", variable=once_var).pack(pady=3)
 
 # === Alarm List Display ===
 ttk.Label(app, text="Alarms List (Double-click to toggle enable/disable)").pack(pady=5)
+
+# Add Spotify connection status
+spotify_status_frame = ttk.Frame(app)
+spotify_status_frame.pack(pady=2)
+
+def update_spotify_status_display():
+    for widget in spotify_status_frame.winfo_children():
+        widget.destroy()
+    
+    if spotify_auth.is_authenticated():
+        ttk.Label(spotify_status_frame, text="🎵 Spotify Connected", 
+                  foreground="green").pack(side="left", padx=5)
+    else:
+        ttk.Label(spotify_status_frame, text="⚠️ Spotify Not Connected (using browser)", 
+                  foreground="orange").pack(side="left", padx=5)
+    
+    ttk.Button(spotify_status_frame, text="Spotify Settings", 
+               command=open_spotify_settings, width=15).pack(side="left", padx=5)
+
+update_spotify_status_display()
+
 alarm_listbox = tk.Listbox(app, width=80, height=10, bg="#1e1e1e", fg="white", font=("Consolas", 9))
 alarm_listbox.pack(pady=5)
 
@@ -304,6 +342,121 @@ def update_status(message):
     timestamp = datetime.now().strftime("%H:%M:%S")
     status_var.set(f"[{timestamp}] {message}")
 
+def extract_track_uri(url):
+    """Extract Spotify URI from URL"""
+    try:
+        if 'track/' in url:
+            track_id = url.split('track/')[1].split('?')[0]
+            return f"spotify:track:{track_id}"
+        elif 'album/' in url:
+            album_id = url.split('album/')[1].split('?')[0]
+            return f"spotify:album:{album_id}"
+        elif 'playlist/' in url:
+            playlist_id = url.split('playlist/')[1].split('?')[0]
+            return f"spotify:playlist:{playlist_id}"
+    except:
+        pass
+    return None
+
+def open_spotify_settings():
+    """Open Spotify connection settings dialog"""
+    settings_window = tk.Toplevel(app)
+    settings_window.title("Spotify Connection Settings")
+    settings_window.geometry("500x400")
+    settings_window.configure(bg="#2b2b2b")
+    
+    ttk.Label(settings_window, text="Connect BeatWake to Spotify", 
+              font=("Segoe UI", 14, "bold")).pack(pady=10)
+    
+    # Status
+    status_label = ttk.Label(settings_window, text="")
+    status_label.pack(pady=5)
+    
+    def update_connection_status():
+        if spotify_auth.is_authenticated():
+            status_label.config(text="✅ Connected to Spotify", foreground="green")
+        else:
+            status_label.config(text="❌ Not Connected", foreground="red")
+    
+    update_connection_status()
+    
+    # Instructions
+    info_frame = ttk.Frame(settings_window)
+    info_frame.pack(pady=10, padx=20, fill="both", expand=True)
+    
+    instructions = """
+To connect BeatWake to Spotify:
+
+1. Create a Spotify App at:
+   https://developer.spotify.com/dashboard
+
+2. Click "Create App" and fill in:
+   - App Name: BeatWake
+   - Redirect URI: http://localhost:8888/callback
+
+3. Copy your Client ID and Client Secret below
+
+4. Click "Connect to Spotify" and authorize the app
+    """
+    
+    ttk.Label(info_frame, text=instructions, justify="left", 
+              wraplength=450).pack(pady=5)
+    
+    # Credentials input
+    cred_frame = ttk.Frame(settings_window)
+    cred_frame.pack(pady=10, padx=20, fill="x")
+    
+    ttk.Label(cred_frame, text="Client ID:").grid(row=0, column=0, sticky="w", pady=5)
+    client_id_entry = ttk.Entry(cred_frame, width=50)
+    client_id_entry.grid(row=0, column=1, pady=5, padx=5)
+    if spotify_auth.client_id:
+        client_id_entry.insert(0, spotify_auth.client_id)
+    
+    ttk.Label(cred_frame, text="Client Secret:").grid(row=1, column=0, sticky="w", pady=5)
+    client_secret_entry = ttk.Entry(cred_frame, width=50, show="*")
+    client_secret_entry.grid(row=1, column=1, pady=5, padx=5)
+    if spotify_auth.client_secret:
+        client_secret_entry.insert(0, spotify_auth.client_secret)
+    
+    # Buttons
+    btn_frame = ttk.Frame(settings_window)
+    btn_frame.pack(pady=10)
+    
+    def save_and_connect():
+        client_id = client_id_entry.get().strip()
+        client_secret = client_secret_entry.get().strip()
+        
+        if not client_id or not client_secret:
+            messagebox.showerror("Error", "Please enter both Client ID and Client Secret")
+            return
+        
+        spotify_auth.set_credentials(client_id, client_secret)
+        
+        def auth_callback(success):
+            if success:
+                settings_window.after(0, lambda: messagebox.showinfo(
+                    "Success", "Successfully connected to Spotify!"))
+                settings_window.after(0, update_connection_status)
+            else:
+                settings_window.after(0, lambda: messagebox.showerror(
+                    "Error", "Failed to connect to Spotify. Please try again."))
+        
+        if spotify_auth.start_auth_flow(auth_callback):
+            messagebox.showinfo("Authorization", 
+                "Your browser will open. Please authorize BeatWake to access Spotify.")
+        else:
+            messagebox.showerror("Error", "Failed to start authorization flow")
+    
+    def open_dashboard():
+        webbrowser.open("https://developer.spotify.com/dashboard")
+    
+    ttk.Button(btn_frame, text="Open Spotify Dashboard", 
+               command=open_dashboard).pack(side="left", padx=5)
+    ttk.Button(btn_frame, text="Connect to Spotify", 
+               command=save_and_connect).pack(side="left", padx=5)
+    ttk.Button(btn_frame, text="Close", 
+               command=settings_window.destroy).pack(side="left", padx=5)
+
 # === Buttons ===
 btn_frame = ttk.Frame(app)
 btn_frame.pack(pady=10)
@@ -316,5 +469,12 @@ ttk.Button(btn_frame, text="Snooze 5min", width=15, command=lambda: snooze_selec
 load_alarms()
 threading.Thread(target=alarm_checker, daemon=True).start()
 update_status("Application started")
+
+# Refresh Spotify status every 30 seconds
+def refresh_spotify_status():
+    update_spotify_status_display()
+    app.after(30000, refresh_spotify_status)
+
+refresh_spotify_status()
 
 app.mainloop()

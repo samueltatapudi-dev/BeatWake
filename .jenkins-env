@@ -1,0 +1,20 @@
+# Jenkins Environment Configuration for BeatWake
+
+# Python settings
+PYTHON_VERSION=3.12
+VENV_DIR=.venv
+
+# Build settings
+BUILD_DIR=dist
+ARTIFACT_NAME=BeatWake
+
+# Git settings
+GIT_BRANCH=main
+
+# Notification settings (optional)
+NOTIFY_EMAIL=your-email@example.com
+
+# Test settings
+RUN_TESTS=true
+RUN_LINT=true
+RUN_SECURITY_SCAN=true
